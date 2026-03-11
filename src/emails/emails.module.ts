@@ -14,5 +14,6 @@ import { Template, TemplateSchema } from '../templates/schemas/template.schema';
   ],
   controllers: [EmailsController],
   providers: [EmailsService],
+  exports: [EmailsService],
 })
 export class EmailsModule {}

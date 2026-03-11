@@ -3,8 +3,11 @@ import { MongooseModule } from '@nestjs/mongoose';
 import dotenv from 'dotenv';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AuthModule } from './auth/auth.module';
+import { CampaignsModule } from './campaigns/campaigns.module';
 import { EmailsModule } from './emails/emails.module';
 import { TemplatesModule } from './templates/templates.module';
+import { UsersModule } from './users/users.module';
 
 dotenv.config();
 
@@ -19,6 +22,9 @@ if (!mongoUri) {
 @Module({
   imports: [
     MongooseModule.forRoot(mongoUri),
+    UsersModule,
+    AuthModule,
+    CampaignsModule,
     EmailsModule,
     TemplatesModule,
   ],

@@ -52,6 +52,99 @@ export class EmailsService {
     return render(component, { pretty: true });
   }
 
+  private resolveVariables(
+    content: string,
+    overrides?: Record<string, string>,
+    useSample = false,
+  ): Record<string, string> {
+    if (overrides) {
+      return overrides;
+    }
+    return useSample ? this.buildTestVariables(content) : {};
+  }
+
+  private async buildHtml(
+    htmlSource: string,
+    variables: Record<string, string>,
+  ): Promise<string> {
+    const compiled = Handlebars.compile(htmlSource)(variables);
+    const mjmlResult = mjml2html(compiled, { validationLevel: 'soft' });
+    const emailSafeHtml = mjmlResult.errors?.length ? compiled : mjmlResult.html;
+    return this.renderHtml(emailSafeHtml);
+  }
+
+  async sendCampaignEmail(params: {
+    template: Template;
+    to: string;
+    subject?: string;
+    from?: string;
+    variables?: Record<string, string>;
+  }): Promise<EmailSendResult> {
+    const htmlSource = params.template.htmlContent ?? '';
+    if (!htmlSource.trim()) {
+      throw new BadRequestException('Template has no htmlContent');
+    }
+
+    const variables = this.resolveVariables(
+      htmlSource,
+      params.variables,
+      false,
+    );
+    const finalHtml = await this.buildHtml(htmlSource, variables);
+
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      throw new BadRequestException('RESEND_API_KEY is not set');
+    }
+
+    const resend = new Resend(apiKey);
+    const subject = params.subject ?? params.template.name;
+    const from = params.from ?? process.env.RESEND_FROM ?? 'onboarding@resend.dev';
+
+    try {
+      const response = await resend.emails.send({
+        from,
+        to: params.to,
+        subject,
+        html: finalHtml,
+      });
+
+      const log = await this.emailLogModel.create({
+        templateId: new Types.ObjectId(params.template._id),
+        to: params.to,
+        subject,
+        status: EmailStatus.SENT,
+        providerId: response.data?.id,
+        meta: response,
+      });
+
+      this.logger.log(`Campaign email sent: ${log._id.toString()}`);
+
+      return {
+        status: EmailStatus.SENT,
+        logId: log._id.toString(),
+        providerId: response.data?.id,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Send failed';
+
+      const log = await this.emailLogModel.create({
+        templateId: new Types.ObjectId(params.template._id),
+        to: params.to,
+        subject,
+        status: EmailStatus.FAILED,
+        errorMessage: message,
+      });
+
+      this.logger.error(`Campaign email failed: ${log._id.toString()} - ${message}`);
+
+      return {
+        status: EmailStatus.FAILED,
+        logId: log._id.toString(),
+      };
+    }
+  }
+
   async sendTest(payload: SendTestDto): Promise<EmailSendResult> {
     if (!isValidObjectId(payload.templateId)) {
       throw new BadRequestException('Invalid template id');
@@ -71,15 +164,8 @@ export class EmailsService {
       throw new BadRequestException('Template has no htmlContent');
     }
 
-    const defaults = this.buildTestVariables(htmlSource);
-    const compiled = Handlebars.compile(htmlSource)(defaults);
-
-    const mjmlResult = mjml2html(compiled, { validationLevel: 'soft' });
-    const emailSafeHtml = mjmlResult.errors?.length
-      ? compiled
-      : mjmlResult.html;
-
-    const finalHtml = await this.renderHtml(emailSafeHtml);
+    const variables = this.resolveVariables(htmlSource, undefined, true);
+    const finalHtml = await this.buildHtml(htmlSource, variables);
 
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) {
